@@ -5,6 +5,20 @@ import { useNavigate } from 'react-router-dom';
 
 import { PROBLEMS } from '../data/codingProblems';
 
+const SOLVED_PROBLEMS_STORAGE_KEY = 'codingSolvedProblems';
+
+const loadSolvedProblemIds = () => {
+  if (typeof window === 'undefined') return [];
+
+  try {
+    const raw = window.localStorage.getItem(SOLVED_PROBLEMS_STORAGE_KEY);
+    const parsed = JSON.parse(raw || '[]');
+    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+};
+
 const difficultyStyles = {
   Easy: 'text-emerald-700 bg-emerald-50 border-emerald-200 dark:text-emerald-200 dark:bg-emerald-500/10 dark:border-emerald-500/30',
   Medium: 'text-amber-700 bg-amber-50 border-amber-200 dark:text-amber-200 dark:bg-amber-500/10 dark:border-amber-500/30',
@@ -15,6 +29,7 @@ const CodingLab = () => {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [difficulty, setDifficulty] = useState('All');
+  const [solvedProblemIds] = useState(() => loadSolvedProblemIds());
 
   const filteredProblems = useMemo(() => {
     return PROBLEMS.filter((problem) => {
@@ -37,6 +52,11 @@ const CodingLab = () => {
       hard: PROBLEMS.filter((problem) => problem.difficulty === 'Hard').length,
     };
   }, []);
+
+  const solvedProblems = useMemo(
+    () => PROBLEMS.filter((problem) => solvedProblemIds.includes(problem.id)),
+    [solvedProblemIds],
+  );
 
   return (
     <main className="relative min-h-screen overflow-x-hidden bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
@@ -89,6 +109,34 @@ const CodingLab = () => {
             <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Visible</p>
             <p className="mt-1 text-2xl font-extrabold">{filteredProblems.length}</p>
           </div>
+        </section>
+
+        <section className="mb-4 rounded-3xl border border-white/60 bg-white/75 p-4 shadow-soft backdrop-blur-xl dark:border-slate-800/80 dark:bg-slate-900/70">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm font-extrabold tracking-wide">Solved Problems</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              {solvedProblems.length} solved
+            </p>
+          </div>
+
+          {!solvedProblems.length ? (
+            <p className="text-sm text-slate-600 dark:text-slate-300">
+              No solved problems yet. Open a challenge and click <strong>Mark as Solved</strong> after completing it.
+            </p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {solvedProblems.map((problem) => (
+                <button
+                  key={problem.id}
+                  type="button"
+                  onClick={() => navigate(`/coding/${problem.id}`)}
+                  className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 hover:bg-emerald-100 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200"
+                >
+                  {problem.title}
+                </button>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="mb-4 rounded-3xl border border-white/60 bg-white/75 p-4 shadow-soft backdrop-blur-xl dark:border-slate-800/80 dark:bg-slate-900/70">

@@ -1,7 +1,7 @@
 import { motion } from 'framer-motion';
 import { useEffect, useMemo, useState } from 'react';
 import Editor from '@monaco-editor/react';
-import { ArrowLeft, Code2, Lightbulb, LoaderCircle, PlayCircle, RotateCcw } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Code2, Lightbulb, LoaderCircle, PlayCircle, RotateCcw } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { LANGUAGES, PROBLEMS } from '../data/codingProblems';
@@ -14,6 +14,89 @@ const difficultyStyles = {
   Hard: 'text-rose-700 bg-rose-50 border-rose-200 dark:text-rose-200 dark:bg-rose-500/10 dark:border-rose-500/30',
 };
 
+const SOLVED_PROBLEMS_STORAGE_KEY = 'codingSolvedProblems';
+const CODING_DRAFTS_STORAGE_KEY = 'codingDraftsByProblemLanguage';
+const SOLVED_CODE_SNAPSHOTS_STORAGE_KEY = 'codingSolvedCodeSnapshots';
+
+const loadStoredMap = (storageKey) => {
+  if (typeof window === 'undefined') return {};
+
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    const parsed = JSON.parse(raw || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const saveStoredMap = (storageKey, value) => {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(storageKey, JSON.stringify(value));
+};
+
+const loadSolvedProblemIds = () => {
+  if (typeof window === 'undefined') return [];
+
+  try {
+    const raw = window.localStorage.getItem(SOLVED_PROBLEMS_STORAGE_KEY);
+    const parsed = JSON.parse(raw || '[]');
+    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+};
+
+const saveSolvedProblemIds = (problemIds) => {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(SOLVED_PROBLEMS_STORAGE_KEY, JSON.stringify(problemIds));
+};
+
+const getNoOutputHint = (language) => {
+  if (language === 'java') {
+    return 'Execution finished, but nothing was printed. In Java, print from main() using System.out.println(...).';
+  }
+
+  if (language === 'cpp') {
+    return 'Execution finished, but nothing was printed. In C++, print from main() using cout << ...;';
+  }
+
+  return 'Execution finished, but your code did not print/return any value for the provided input.';
+};
+
+const isStarterCodeUnchanged = (language, userCode, activeProblem) => {
+  const starter = String(activeProblem?.starterCode?.[language] || '').trim();
+  const current = String(userCode || '').trim();
+  return Boolean(starter) && starter === current;
+};
+
+const hasPlaceholderLogic = (language, userCode) => {
+  const code = String(userCode || '');
+
+  if (language === 'javascript') {
+    return /\/\/\s*return\s*\[i\s*,\s*j\]/i.test(code)
+      || /function\s+solve\s*\([^)]*\)\s*\{\s*(?:\/\/.*)?\s*\}$/s.test(code);
+  }
+
+  if (language === 'python') {
+    return /def\s+solve\s*\([^)]*\):[\s\S]*\bpass\b/.test(code);
+  }
+
+  if (language === 'java') {
+    return /return\s+new\s+int\[\]\s*\{\s*\}\s*;/.test(code)
+      || /return\s+false\s*;/.test(code)
+      || /return\s+-?1\s*;/.test(code);
+  }
+
+  if (language === 'cpp') {
+    return /return\s*\{\s*\}\s*;/.test(code)
+      || /return\s+false\s*;/.test(code)
+      || /return\s+-?1\s*;/.test(code);
+  }
+
+  return false;
+};
+
 const CodingProblemPage = () => {
   const navigate = useNavigate();
   const { problemId } = useParams();
@@ -24,18 +107,21 @@ const CodingProblemPage = () => {
   );
 
   const [activeLanguage, setActiveLanguage] = useState(LANGUAGES[0]);
-  const [drafts, setDrafts] = useState({});
+  const [drafts, setDrafts] = useState(() => loadStoredMap(CODING_DRAFTS_STORAGE_KEY));
   const [feedback, setFeedback] = useState('');
   const [stdin, setStdin] = useState('');
-  const [result, setResult] = useState({ output: '', stderr: '', compileOutput: '' });
+  const [result, setResult] = useState({ output: '', stderr: '', compileOutput: '', status: '', signal: '', executionState: 'neutral' });
   const [isRunning, setIsRunning] = useState(false);
   const [showSolution, setShowSolution] = useState(false);
+  const [solvedProblemIds, setSolvedProblemIds] = useState(() => loadSolvedProblemIds());
+  const [solvedCodeSnapshots, setSolvedCodeSnapshots] = useState(() => loadStoredMap(SOLVED_CODE_SNAPSHOTS_STORAGE_KEY));
 
   const isDarkTheme =
     typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
 
   const draftKey = `${activeProblem.id}::${activeLanguage}`;
   const currentCode = drafts[draftKey] ?? activeProblem.starterCode[activeLanguage];
+  const savedSolvedSnapshot = solvedCodeSnapshots[draftKey];
 
   const solutionForProblem = PROBLEM_SOLUTIONS[activeProblem.id] || {};
   const selectedHint = solutionForProblem[activeLanguage] || solutionForProblem.javascript;
@@ -53,10 +139,23 @@ const CodingProblemPage = () => {
       };
 
   const solutionCode = hintData.improved || 'Solution is not available for this problem yet.';
+  const isSolved = solvedProblemIds.includes(activeProblem.id);
 
   useEffect(() => {
     setShowSolution(false);
   }, [activeProblem.id, activeLanguage]);
+
+  useEffect(() => {
+    saveSolvedProblemIds(solvedProblemIds);
+  }, [solvedProblemIds]);
+
+  useEffect(() => {
+    saveStoredMap(CODING_DRAFTS_STORAGE_KEY, drafts);
+  }, [drafts]);
+
+  useEffect(() => {
+    saveStoredMap(SOLVED_CODE_SNAPSHOTS_STORAGE_KEY, solvedCodeSnapshots);
+  }, [solvedCodeSnapshots]);
 
   const updateCode = (value) => {
     setDrafts((previous) => ({
@@ -76,6 +175,45 @@ const CodingProblemPage = () => {
   const toggleHint = () => {
     setShowSolution((previous) => !previous);
     setFeedback('Hint toggled. Compare with the improved solution and update your implementation.');
+  };
+
+  const toggleSolvedProblem = () => {
+    setSolvedCodeSnapshots((previous) => ({
+      ...previous,
+      [draftKey]: {
+        code: currentCode,
+        stdin,
+        savedAt: new Date().toISOString(),
+      },
+    }));
+
+    setSolvedProblemIds((previous) => {
+      if (previous.includes(activeProblem.id)) {
+        setFeedback('Problem removed from solved list. Your saved solved code is still available.');
+        return previous.filter((id) => id !== activeProblem.id);
+      }
+
+      setFeedback('Great work! Problem added to solved list and code snapshot saved.');
+      return [...previous, activeProblem.id];
+    });
+  };
+
+  const loadSolvedSnapshot = () => {
+    if (!savedSolvedSnapshot?.code) {
+      setFeedback('No saved solved code found for this language yet.');
+      return;
+    }
+
+    setDrafts((previous) => ({
+      ...previous,
+      [draftKey]: savedSolvedSnapshot.code,
+    }));
+
+    if (typeof savedSolvedSnapshot.stdin === 'string') {
+      setStdin(savedSolvedSnapshot.stdin);
+    }
+
+    setFeedback('Loaded your saved solved code for this problem/language.');
   };
 
   const monacoLanguage = activeLanguage === 'cpp' ? 'cpp' : activeLanguage;
@@ -169,7 +307,7 @@ int main() {
   const executeCode = async () => {
     setIsRunning(true);
     setFeedback('Running your code on remote runtime...');
-    setResult({ output: '', stderr: '', compileOutput: '' });
+    setResult({ output: '', stderr: '', compileOutput: '', status: '', signal: '', executionState: 'neutral' });
 
     try {
       const sourceToRun = buildExecutableSource({
@@ -183,26 +321,66 @@ int main() {
         stdin,
       });
 
+      const output = response.output || response.stdout || '';
+      const compileOutput = response.compileOutput || response.compile_output || '';
+      const stderr = response.stderr || '';
+      const status = response.status || '';
+      const signal = response.signal || '';
+      const nonSuccessStatus = status && !/accepted|success/i.test(status);
+
+      const normalizedError = stderr || (nonSuccessStatus ? `${status}${signal ? `: ${signal}` : ''}` : '');
+      const starterUnchanged = isStarterCodeUnchanged(activeLanguage, currentCode, activeProblem);
+      const placeholderLogic = hasPlaceholderLogic(activeLanguage, currentCode);
+
+      const outputText = String(output || '').trim();
+      const noInputHint = /No input provided\. Add stdin JSON/i.test(outputText);
+      const undefinedLikeOutput = /^(undefined|null|none)$/i.test(outputText);
+
+      let executionState = 'success';
+      if (normalizedError || compileOutput) {
+        executionState = 'error';
+      } else if (!outputText || noInputHint || undefinedLikeOutput || starterUnchanged || placeholderLogic) {
+        executionState = 'warning';
+      }
+
       setResult({
-        output: response.output || '',
-        stderr: response.stderr || '',
-        compileOutput: response.compileOutput || '',
+        output,
+        stderr: normalizedError,
+        compileOutput,
+        status,
+        signal,
+        executionState,
       });
 
-      if (response.stderr || response.compileOutput) {
+      if (normalizedError || compileOutput) {
         setFeedback('Execution completed with errors/warnings. Review output below.');
-      } else if (!String(response.output || '').trim()) {
-        setFeedback('Execution completed but no output was printed. For Java/C++ ensure you print results in main/output code.');
+      } else if (!String(output || '').trim()) {
+        setResult((previous) => ({
+          ...previous,
+          output: getNoOutputHint(activeLanguage),
+          executionState: 'warning',
+        }));
+        setFeedback('Execution completed with no printed output. Added guidance in Program Output.');
+      } else if (starterUnchanged || placeholderLogic || noInputHint || undefinedLikeOutput) {
+        setFeedback('Code executed, but solution looks incomplete. Please write proper logic before marking solved.');
       } else {
         setFeedback('Execution completed successfully.');
       }
     } catch (error) {
       setFeedback(error.message || 'Execution failed.');
-      setResult({ output: '', stderr: error.message || 'Execution failed.', compileOutput: '' });
+      setResult({ output: '', stderr: error.message || 'Execution failed.', compileOutput: '', status: 'Execution failed', signal: '', executionState: 'error' });
     } finally {
       setIsRunning(false);
     }
   };
+
+  const programOutputPanelClass = result.executionState === 'error'
+    ? 'mt-3 rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-xs dark:border-rose-500/40 dark:bg-rose-500/10'
+    : result.executionState === 'warning'
+      ? 'mt-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs dark:border-amber-500/40 dark:bg-amber-500/10'
+    : result.executionState === 'success'
+      ? 'mt-3 rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs dark:border-emerald-500/40 dark:bg-emerald-500/10'
+      : 'mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800/60';
 
   return (
     <main className="relative min-h-screen overflow-x-hidden bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
@@ -256,6 +434,16 @@ int main() {
 
               <h2 className="text-lg font-extrabold">Problem Statement</h2>
               <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{activeProblem.description}</p>
+
+              <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
+                <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Custom Input (stdin)</p>
+                <textarea
+                  value={stdin}
+                  onChange={(event) => setStdin(event.target.value)}
+                  placeholder='Provide runtime input as JSON. Example: [[2,7,11,15],9]'
+                  className="h-24 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none ring-brand-500 focus:ring-2 dark:border-slate-700 dark:bg-slate-800"
+                />
+              </div>
 
 
               {showSolution ? (
@@ -334,16 +522,6 @@ int main() {
                 />
               </div>
 
-              <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
-                <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Custom Input (stdin)</p>
-                <textarea
-                  value={stdin}
-                  onChange={(event) => setStdin(event.target.value)}
-                  placeholder='Provide runtime input as JSON. Example: [[2,7,11,15],9]'
-                  className="h-24 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none ring-brand-500 focus:ring-2 dark:border-slate-700 dark:bg-slate-800"
-                />
-              </div>
-
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">
                   Language: <span className="font-bold text-slate-700 dark:text-slate-200">{activeLanguage.toUpperCase()}</span>
@@ -372,6 +550,23 @@ int main() {
                 >
                   <span className="inline-flex items-center gap-1"><RotateCcw size={13} /> Reset Code</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={toggleSolvedProblem}
+                  className={`inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-bold text-white ${
+                    isSolved ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-slate-700 hover:bg-slate-800 dark:bg-slate-600 dark:hover:bg-slate-500'
+                  }`}
+                >
+                  <CheckCircle2 size={14} /> {isSolved ? 'Solved' : 'Mark as Solved'}
+                </button>
+                <button
+                  type="button"
+                  onClick={loadSolvedSnapshot}
+                  disabled={!savedSolvedSnapshot?.code}
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900"
+                >
+                  Load Saved Solution
+                </button>
                 </div>
               </div>
 
@@ -382,9 +577,19 @@ int main() {
                 <p className="mt-1">{feedback || 'Focus on optimal logic first, then refine for edge cases and readability.'}</p>
               </div>
 
-              <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800/60">
+              <div className={programOutputPanelClass}>
                 <p className="mb-1 font-extrabold text-slate-700 dark:text-slate-200">Program Output</p>
                 <pre className="max-h-40 overflow-auto whitespace-pre-wrap text-slate-600 dark:text-slate-300">{result.output || 'No output yet.'}</pre>
+
+                {result.status ? (
+                  <p className="mt-2 font-semibold text-slate-600 dark:text-slate-300">
+                    Runtime Status: <span className="font-extrabold">{result.status}</span>
+                  </p>
+                ) : null}
+
+                {result.signal && !result.stderr ? (
+                  <p className="mt-1 text-slate-600 dark:text-slate-300">{result.signal}</p>
+                ) : null}
 
                 {result.compileOutput ? (
                   <>

@@ -5,7 +5,44 @@ const languageConfig = {
   cpp: { languageId: 54 },
 };
 
-const JUDGE0_ENDPOINT = 'https://ce.judge0.com/submissions/?base64_encoded=false&wait=true';
+const JUDGE0_ENDPOINT = 'https://ce.judge0.com/submissions?base64_encoded=false';
+const JUDGE0_POLL_INTERVAL_MS = 700;
+const JUDGE0_MAX_POLL_ATTEMPTS = 18;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const fetchSubmissionResult = async (token) => {
+  const resultUrl = `https://ce.judge0.com/submissions/${token}?base64_encoded=false`;
+
+  for (let attempt = 0; attempt < JUDGE0_MAX_POLL_ATTEMPTS; attempt += 1) {
+    const response = await fetch(resultUrl);
+    const data = await response.json();
+
+    if (!response.ok) {
+      const message = data?.message || 'Code execution failed while fetching result.';
+      throw new Error(message);
+    }
+
+    const statusId = data?.status?.id;
+    const isDone = typeof statusId === 'number' ? statusId > 2 : true;
+    if (isDone) {
+      return data;
+    }
+
+    await sleep(JUDGE0_POLL_INTERVAL_MS);
+  }
+
+  return {
+    stdout: '',
+    stderr: '',
+    compile_output: '',
+    message: 'Execution timed out while waiting for runtime result. Please try again.',
+    status: {
+      id: 5,
+      description: 'Time Limit Exceeded',
+    },
+  };
+};
 
 export const runCode = async (req, res, next) => {
   try {
@@ -29,24 +66,36 @@ export const runCode = async (req, res, next) => {
       }),
     });
 
-    const data = await response.json();
+    const submission = await response.json();
 
     if (!response.ok) {
-      const message = data?.message || 'Code execution failed.';
+      const message = submission?.message || 'Code execution failed.';
       res.status(502);
       throw new Error(message);
     }
 
+    const token = submission?.token;
+    if (!token) {
+      res.status(502);
+      throw new Error('Code execution failed: missing submission token.');
+    }
+
+    const data = await fetchSubmissionResult(token);
+
     const statusId = data?.status?.id;
     const statusDescription = data?.status?.description || 'Unknown';
+    const stderr = data?.stderr || '';
+    const compileOutput = data?.compile_output || '';
+    const signal = data?.message || '';
+    const output = data?.stdout || '';
 
     res.status(200).json({
-      output: data?.stdout || '',
-      stdout: data?.stdout || '',
-      stderr: data?.stderr || '',
-      compileOutput: data?.compile_output || '',
+      output,
+      stdout: output,
+      stderr,
+      compileOutput,
       code: typeof statusId === 'number' ? statusId : 0,
-      signal: data?.message || '',
+      signal,
       status: statusDescription,
     });
   } catch (error) {
